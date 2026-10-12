@@ -1,0 +1,501 @@
+<title>تخطي الحواجز</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@500;700&family=Lalezar&display=swap">
+<style>
+/* Layout: the stage fills the whole screen; score HUD floats on top. Desert-at-noon palette, committed to a single look. */
+:root {
+  --sand: #F7E8D6;
+  --sky-bottom: #F7C79E;
+  --ink: #2B2D5B;
+  --plum: #3A2E6B;
+  --coral: #FF5A47;
+  --font-display: "Lalezar", "Cairo", "Segoe UI", Tahoma, sans-serif;
+  --font-body: "Cairo", "Segoe UI", Tahoma, sans-serif;
+  color-scheme: light;
+}
+html, body { height: 100%; }
+* { box-sizing: border-box; }
+body {
+  background: var(--sand);
+  color: var(--ink);
+  font-family: var(--font-body);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--sky-bottom);
+  cursor: pointer;
+}
+canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  pointer-events: none;
+}
+.scores { display: flex; gap: 22px; }
+.stat { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.stat .label { font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; opacity: 0.8; }
+.stat .value { font-size: 1.8rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.btn {
+  pointer-events: auto;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: rgba(247, 232, 214, 0.6);
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 3px 14px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--ink); color: var(--sand); }
+.btn:focus-visible { outline: 3px solid var(--coral); outline-offset: 2px; }
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 16px;
+  pointer-events: none;
+}
+.overlay[hidden] { display: none !important; }
+.ov-title {
+  font-family: var(--font-display);
+  font-size: clamp(2.6rem, 9vw, 4.4rem);
+  line-height: 1.05;
+  margin: 0;
+  text-wrap: balance;
+}
+.ov-sub {
+  margin: 0;
+  font-size: clamp(1rem, 3.6vw, 1.25rem);
+  font-weight: 500;
+  max-width: 28ch;
+  text-wrap: balance;
+}
+.ov-badge {
+  margin-top: 4px;
+  background: var(--coral);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 2px 12px;
+  border-radius: 999px;
+}
+.ov-badge[hidden] { display: none !important; }
+</style>
+
+<div class="stage" id="stage" dir="rtl" lang="ar">
+  <canvas id="game" aria-label="لعبة النط: الأيقونة بتجري وإنت بتنطها فوق العوائق" role="img"></canvas>
+  <div class="hud">
+    <div class="scores">
+      <div class="stat"><span class="label">النتيجة</span><span class="value" id="score">٠</span></div>
+      <div class="stat"><span class="label">أحسن نتيجة</span><span class="value" id="best">٠</span></div>
+    </div>
+    <button class="btn" id="soundBtn" type="button" aria-pressed="true">الصوت: شغال</button>
+  </div>
+  <div class="overlay" id="overlay">
+    <h2 class="ov-title" id="ovTitle">تخطي الحواجز</h2>
+    <p class="ov-sub" id="ovSub">دوس في أي مكان (أو المسطرة) والأيقونة هتنط</p>
+    <span class="ov-badge" id="ovBadge" hidden>رقم قياسي جديد</span>
+  </div>
+</div>
+
+<script>
+(function () {
+  var stage = document.getElementById('stage');
+  var cv = document.getElementById('game');
+  var ctx = cv.getContext('2d');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+  var overlay = document.getElementById('overlay');
+  var ovTitle = document.getElementById('ovTitle');
+  var ovSub = document.getElementById('ovSub');
+  var ovBadge = document.getElementById('ovBadge');
+  var soundBtn = document.getElementById('soundBtn');
+
+  var C = { ink: '#2B2D5B', plum: '#3A2E6B', coral: '#FF5A47', dune: '#EDBB92', duneShade: '#E1A577', sun: '#FFB347', skyTop: '#FDEBD3', skyBottom: '#F7C79E', ground: '#2B2D5B' };
+
+  var GRAVITY = 2200;
+  var JUMP = 720;
+  var AIRTIME = 2 * JUMP / GRAVITY;
+  var DRONE_LIFT = 64;
+
+  var W = 800, H = 360, GROUND = 300, S = 1;
+  var P = { x: 80, w: 44, h: 44, z: 0, vz: 0, rot: 0, onGround: true, squash: 0 };
+  var state = 'ready';
+  var obs = [];
+  var speed = 330, score = 0, dist = 0, spawnIn = 400, shake = 0, overAt = 0, last = 0;
+  var best = 0;
+  var soundOn = true, actx = null;
+
+  try { best = parseInt(localStorage.getItem('nat-best'), 10) || 0; } catch (e) {}
+
+  function fmt(n) { return Number(n).toLocaleString('ar-EG'); }
+  function showScore() { scoreEl.textContent = fmt(score); bestEl.textContent = fmt(best); }
+
+  function layout() {
+    var cw = stage.clientWidth || 600;
+    var ch = stage.clientHeight || 400;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    H = 360;
+    W = cw / ch * H;
+    if (W < 480) { W = 480; H = ch / cw * W; }
+    cv.width = Math.round(cw * dpr);
+    cv.height = Math.round(ch * dpr);
+    ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+    GROUND = H - Math.max(56, H * 0.16);
+    S = Math.min(2, Math.max(1, H / 360));
+    P.x = Math.max(60, Math.min(140, W * 0.1));
+  }
+
+  function resetGame() {
+    obs = [];
+    score = 0; dist = 0; speed = 330; spawnIn = 420; shake = 0;
+    P.z = 0; P.vz = 0; P.rot = 0; P.onGround = true; P.squash = 0;
+    state = 'ready';
+    showScore();
+    overlay.hidden = false;
+    ovTitle.textContent = 'تخطي الحواجز';
+    ovSub.textContent = 'دوس في أي مكان (أو المسطرة) والأيقونة هتنط';
+    ovBadge.hidden = true;
+  }
+
+  function beep(freq, dur) {
+    if (!soundOn) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = actx.createOscillator();
+      var g = actx.createGain();
+      o.type = 'square';
+      o.frequency.setValueAtTime(freq, actx.currentTime);
+      o.frequency.exponentialRampToValueAtTime(freq * 1.6, actx.currentTime + dur);
+      g.gain.setValueAtTime(0.05, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur);
+    } catch (e) {}
+  }
+
+  function startGame() {
+    state = 'playing';
+    overlay.hidden = true;
+  }
+
+  function action() {
+    if (state === 'ready') {
+      startGame();
+    } else if (state === 'over') {
+      if (performance.now() - overAt < 400) return;
+      resetGame();
+      startGame();
+    }
+    if (state === 'playing' && P.onGround) {
+      P.vz = JUMP;
+      P.onGround = false;
+      P.squash = 0;
+      beep(380, 0.12);
+    }
+  }
+
+  function gameOver() {
+    state = 'over';
+    overAt = performance.now();
+    shake = 0.3;
+    beep(120, 0.3);
+    var isBest = score > best;
+    if (isBest) {
+      best = score;
+      try { localStorage.setItem('nat-best', String(best)); } catch (e) {}
+    }
+    showScore();
+    ovTitle.textContent = 'خبطت!';
+    ovSub.textContent = 'نتيجتك ' + fmt(score) + '. دوس تاني وجرّب من الأول';
+    ovBadge.hidden = !isBest;
+    overlay.hidden = false;
+  }
+
+  /* Obstacle groups. Each part: type, width, height, x offset, lift above ground. */
+  var SPIKE = { type: 'spike', w: 34, h: 40, dx: 0, lift: 0 };
+  function spike(dx) { return { type: 'spike', w: 34, h: 40, dx: dx, lift: 0 }; }
+  function block(dx, w, h, type) { return { type: type || 'block', w: w, h: h, dx: dx, lift: 0 }; }
+
+  var GROUPS = [
+    { min: 0, parts: [spike(0)] },
+    { min: 0, parts: [spike(0)] },
+    { min: 0, parts: [spike(0), spike(34)] },
+    { min: 0, parts: [block(0, 40, 46)] },
+    { min: 0, parts: [block(0, 30, 56, 'tall')] },
+    { min: 0, parts: [block(0, 90, 28, 'low')] },
+    { min: 5, parts: [spike(0), spike(34), spike(68)] },
+    { min: 6, parts: [spike(0), spike(90)] },
+    { min: 8, parts: [block(0, 34, 32), block(34, 34, 56, 'tall')] },
+    { min: 10, parts: [block(0, 34, 56, 'tall'), block(34, 34, 32)] },
+    { min: 12, parts: [{ type: 'drone', w: 44, h: 26, dx: 0, lift: DRONE_LIFT }] },
+    { min: 12, parts: [{ type: 'drone', w: 44, h: 26, dx: 0, lift: DRONE_LIFT }] },
+    { min: 18, parts: [{ type: 'drone', w: 44, h: 26, dx: 0, lift: DRONE_LIFT }, spike(150)] }
+  ];
+
+  function spawn() {
+    var pool = GROUPS.filter(function (g) { return score >= g.min; });
+    var g = pool[Math.floor(Math.random() * pool.length)];
+    var total = 0;
+    for (var i = 0; i < g.parts.length; i++) {
+      var p = g.parts[i];
+      obs.push({ type: p.type, w: p.w, h: p.h, lift: p.lift, x: W + 20 + p.dx });
+      total = Math.max(total, p.dx + p.w);
+    }
+    spawnIn = total + speed * (0.7 + Math.random() * 0.7);
+  }
+
+  function hits(o) {
+    var px = P.x + 8, pw = P.w - 16;
+    var pBottom = GROUND - P.z - 3;
+    var pTop = pBottom - (P.h - 12);
+    var ox, ow, oTop, oBottom;
+    if (o.type === 'drone') {
+      ox = o.x + 5; ow = o.w - 10;
+      oTop = GROUND - o.lift - o.h + 3; oBottom = GROUND - o.lift - 3;
+    } else if (o.type === 'spike') {
+      ox = o.x + o.w * 0.2; ow = o.w * 0.6;
+      oTop = GROUND - o.h * 0.75; oBottom = GROUND;
+    } else {
+      ox = o.x + 2; ow = o.w - 4;
+      oTop = GROUND - o.h; oBottom = GROUND;
+    }
+    return px < ox + ow && px + pw > ox && pBottom > oTop && pTop < oBottom;
+  }
+
+  function update(dt) {
+    if (state === 'ready') { dist += 70 * dt; return; }
+    if (state === 'over') { shake = Math.max(0, shake - dt); return; }
+
+    speed = 330 + Math.min(score * 2.8, 340);
+    dist += speed * dt;
+    score = Math.floor(dist / 18);
+
+    if (!P.onGround) {
+      P.z += P.vz * dt;
+      P.vz -= GRAVITY * dt;
+      P.rot += (Math.PI * 2 / AIRTIME) * dt;
+      if (P.z <= 0) {
+        P.z = 0; P.vz = 0; P.onGround = true; P.rot = 0; P.squash = 1;
+      }
+    }
+    if (P.squash > 0) P.squash = Math.max(0, P.squash - dt * 7);
+
+    spawnIn -= speed * dt;
+    if (spawnIn <= 0) spawn();
+
+    for (var i = obs.length - 1; i >= 0; i--) {
+      var o = obs[i];
+      o.x -= speed * dt;
+      if (o.x + o.w < -10) { obs.splice(i, 1); continue; }
+      if (hits(o)) { gameOver(); break; }
+    }
+    showScore();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function pyramid(cx, base, w, h) {
+    ctx.fillStyle = C.dune;
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, base); ctx.lineTo(cx, base - h); ctx.lineTo(cx + w / 2, base);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = C.duneShade;
+    ctx.beginPath();
+    ctx.moveTo(cx, base - h); ctx.lineTo(cx + w / 2, base); ctx.lineTo(cx + w * 0.08, base);
+    ctx.closePath(); ctx.fill();
+  }
+
+  function drawBackground() {
+    var g = ctx.createLinearGradient(0, 0, 0, GROUND);
+    g.addColorStop(0, C.skyTop);
+    g.addColorStop(1, C.skyBottom);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = C.sun;
+    ctx.beginPath();
+    ctx.arc(W * 0.8, 90 * S, 30 * S, 0, Math.PI * 2);
+    ctx.fill();
+
+    var period = W + 360;
+    var specs = [[0.15, 170, 100], [0.52, 120, 70], [0.88, 210, 120]];
+    for (var i = 0; i < specs.length; i++) {
+      var x = ((specs[i][0] * period - dist * 0.12) % period + period) % period - 180;
+      pyramid(x, GROUND, specs[i][1] * S, specs[i][2] * S);
+    }
+
+    ctx.fillStyle = C.ground;
+    ctx.fillRect(0, GROUND, W, H - GROUND);
+    ctx.fillStyle = C.coral;
+    ctx.fillRect(0, GROUND, W, 4);
+
+    ctx.fillStyle = 'rgba(247,232,214,0.35)';
+    var step = 70;
+    var off = dist % step;
+    var rows = Math.floor((H - GROUND) / 18);
+    for (var d = -step; d < W + step; d += step) {
+      for (var r = 1; r <= rows; r++) {
+        var shift = (r % 2) * 34;
+        ctx.fillRect(d - off + shift, GROUND + r * 16 + 6, 18 + (r % 3) * 6, 3);
+      }
+    }
+  }
+
+  function drawObstacle(o) {
+    ctx.fillStyle = C.plum;
+    var top = GROUND - o.lift - o.h;
+    if (o.type === 'drone') {
+      ctx.beginPath();
+      ctx.ellipse(o.x + o.w / 2, top + o.h / 2 + 2, o.w / 2, o.h / 2 - 1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.coral;
+      ctx.beginPath(); ctx.arc(o.x + 10, top + o.h / 2 + 2, 4, 0, Math.PI * 2); ctx.fill();
+      var flap = 0.35 + 0.65 * Math.abs(Math.sin(performance.now() / 45));
+      ctx.fillStyle = C.plum;
+      ctx.fillRect(o.x + o.w / 2 - (o.w / 2) * flap, top - 3, o.w * flap, 3);
+      ctx.fillRect(o.x + o.w / 2 - 1.5, top - 1, 3, 5);
+    } else if (o.type === 'spike') {
+      ctx.beginPath();
+      ctx.moveTo(o.x, GROUND);
+      ctx.lineTo(o.x + o.w / 2, top);
+      ctx.lineTo(o.x + o.w, GROUND);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      roundRect(o.x, top, o.w, o.h, 6);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.fillRect(o.x + 6, top + 6, 4, Math.max(4, o.h - 14));
+    }
+  }
+
+  function drawPlayer() {
+    var cx = P.x + P.w / 2;
+
+    var sh = Math.max(0.35, 1 - P.z / 160);
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath();
+    ctx.ellipse(cx, GROUND + 6, P.w * 0.5 * sh, 4 * sh, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(cx, GROUND - P.z);
+    ctx.scale(1 + 0.22 * P.squash, 1 - 0.22 * P.squash);
+    ctx.translate(0, -P.h / 2);
+    ctx.rotate(P.rot);
+
+    ctx.fillStyle = C.coral;
+    roundRect(-P.w / 2, -P.h / 2, P.w, P.h, 11);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = C.ink;
+    ctx.stroke();
+
+    var dead = state === 'over';
+    ctx.fillStyle = '#fff';
+    if (!dead) {
+      ctx.beginPath(); ctx.arc(-9, -5, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(9, -5, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = C.ink;
+      ctx.beginPath(); ctx.arc(-7, -5, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(11, -5, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = C.ink;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(0, 6, 7, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    } else {
+      ctx.strokeStyle = C.ink;
+      ctx.lineWidth = 2.5;
+      [[-9, -5], [9, -5]].forEach(function (p) {
+        ctx.beginPath();
+        ctx.moveTo(p[0] - 4, p[1] - 4); ctx.lineTo(p[0] + 4, p[1] + 4);
+        ctx.moveTo(p[0] + 4, p[1] - 4); ctx.lineTo(p[0] - 4, p[1] + 4);
+        ctx.stroke();
+      });
+      ctx.beginPath(); ctx.moveTo(-6, 11); ctx.lineTo(6, 11); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function draw() {
+    ctx.save();
+    if (shake > 0 && !reduceMotion) {
+      ctx.translate((Math.random() - 0.5) * 10 * (shake / 0.3), (Math.random() - 0.5) * 10 * (shake / 0.3));
+    }
+    drawBackground();
+    for (var i = 0; i < obs.length; i++) drawObstacle(obs[i]);
+    drawPlayer();
+    ctx.restore();
+  }
+
+  function frame(now) {
+    var dt = Math.min((now - last) / 1000, 0.033);
+    last = now;
+    if (dt > 0) update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('pointerdown', function (e) {
+    if (e.target.closest && e.target.closest('button')) return;
+    action();
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+      e.preventDefault();
+      if (!e.repeat) action();
+    }
+  });
+  soundBtn.addEventListener('click', function () {
+    soundOn = !soundOn;
+    soundBtn.textContent = soundOn ? 'الصوت: شغال' : 'الصوت: مقفول';
+    soundBtn.setAttribute('aria-pressed', String(soundOn));
+  });
+
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(layout, 100);
+  });
+
+  layout();
+  resetGame();
+  requestAnimationFrame(function (t) { last = t; requestAnimationFrame(frame); });
+})();
+</script>

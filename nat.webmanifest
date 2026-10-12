@@ -1,0 +1,19 @@
+{
+  "id": "./nat.html",
+  "name": "تخطي الحواجز",
+  "short_name": "تخطي الحواجز",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./nat.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#F7C79E",
+  "theme_color": "#F7C79E",
+  "icons": [
+    {"src": "nat-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "nat-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "nat-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
